@@ -237,15 +237,11 @@ jobs:
               env:
                   RESULTS: ${{ toJSON(needs) }}
               run: |
-                  echo "$RESULTS" | node -e '
-                      const needs = JSON.parse(require("fs").readFileSync(0, "utf8"));
-                      let ok = true;
-                      for (const [job, { result }] of Object.entries(needs)) {
-                          console.log(`${job}: ${result}`);
-                          if (result !== "success" && result !== "skipped") ok = false;
-                      }
-                      if (!ok) { console.log("::error::Mindestens eine Prüfung ist fehlgeschlagen"); process.exit(1); }
-                  '
+                  jq -r 'to_entries[] | "\(.key): \(.value.result)"' <<< "$RESULTS"
+                  if jq -e 'any(.[]; .result != "success" and .result != "skipped")' <<< "$RESULTS" > /dev/null; then
+                      echo "::error::Mindestens eine Prüfung ist fehlgeschlagen"
+                      exit 1
+                  fi
 
     # Release nach grüner CI auf dem Standard-Branch, nur wenn der Versions-Tag noch fehlt.
     # Alles in einem Job: Tags und Pushes mit GITHUB_TOKEN lösen keine weiteren Workflows aus.
