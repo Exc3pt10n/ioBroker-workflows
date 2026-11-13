@@ -7,7 +7,7 @@ on:
 
 concurrency:
     group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-    cancel-in-progress: true
+    cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
     contents: read
@@ -24,6 +24,47 @@ jobs:
               with:
                   node-version: '22'
             - name: Tests von check-release.mjs
-              run: node --test test/*.test.mjs
+              run: npm test
             - name: actionlint
               run: docker run --rm -v "$PWD:/repo" --workdir /repo rhysd/actionlint:1.7.12 -color
+
+    # Nach grünem Test auf main: Tag vX.Y.Z aus package.json setzen, falls er fehlt,
+    # und den beweglichen Major-Tag (v1) auf diesen Stand ziehen
+    tag:
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        needs: test
+        runs-on: ubuntu-latest
+        timeout-minutes: 5
+        permissions:
+            contents: write
+        concurrency:
+            group: tag-${{ github.repository }}
+            cancel-in-progress: false
+        steps:
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  fetch-depth: 0
+            - name: Tags setzen
+              run: |
+                  version=$(node -p "require('./package.json').version")
+                  tag="v$version"
+                  major="v${version%%.*}"
+                  head=$(git rev-parse HEAD)
+                  if tagged=$(git rev-parse -q --verify "refs/tags/$tag^{commit}"); then
+                      if [ "$tagged" != "$head" ]; then
+                          echo "::notice::$tag existiert bereits auf ${tagged:0:7}, kein neuer Stand"
+                          exit 0
+                      fi
+                  else
+                      git config user.name "github-actions[bot]"
+                      git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+                      git tag -a "$tag" -m "$tag"
+                      git push origin "refs/tags/$tag"
+                  fi
+                  if [[ "$version" == *-* ]]; then
+                      echo "Vorabversion, $major bleibt unverändert"
+                      exit 0
+                  fi
+                  git tag -f "$major" "$head"
+                  git push -f origin "refs/tags/$major"
+                  echo "$tag und $major zeigen auf ${head:0:7}"
