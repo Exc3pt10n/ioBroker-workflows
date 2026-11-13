@@ -101,6 +101,13 @@ jobs:
                 os: ${{ fromJSON((github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && inputs.weekly-os || '["ubuntu-latest"]') }}
                 node-version: ${{ fromJSON((github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && inputs.weekly-node-versions || inputs.node-versions) }}
         steps:
+            # Windows-Runner haben core.autocrlf=true; Lint (Prettier, endOfLine "lf") und Tests sollen die
+            # Dateien so sehen wie im Repository, auch ohne .gitattributes im Adapter
+            - name: Zeilenenden wie im Repository (LF)
+              if: runner.os == 'Windows'
+              run: |
+                  git config --global core.autocrlf false
+                  git config --global core.eol lf
             - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
               with:
                   persist-credentials: false
@@ -133,6 +140,13 @@ jobs:
                 os: ${{ fromJSON((github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && inputs.weekly-os || '["ubuntu-latest"]') }}
                 node-version: ${{ fromJSON((github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && inputs.weekly-node-versions || format('["{0}"]', inputs.integration-node)) }}
         steps:
+            # Windows-Runner haben core.autocrlf=true; Lint (Prettier, endOfLine "lf") und Tests sollen die
+            # Dateien so sehen wie im Repository, auch ohne .gitattributes im Adapter
+            - name: Zeilenenden wie im Repository (LF)
+              if: runner.os == 'Windows'
+              run: |
+                  git config --global core.autocrlf false
+                  git config --global core.eol lf
             - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
               with:
                   persist-credentials: false
