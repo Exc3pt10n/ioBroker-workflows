@@ -4,7 +4,9 @@
 #
 #   pull_request        check, integration, install, audit, release-guard
 #   push (Standard-Br.) check, integration, install, audit, danach release
-#   schedule/dispatch   volle Matrix (Linux + Windows, alle Node-Versionen), kein Release
+#   schedule            volle Matrix (Linux + Windows, alle Node-Versionen), kein Release
+#   workflow_dispatch   volle Matrix; auf dem Standard-Branch danach release (vervollständigt ein
+#                       abgebrochenes Release, wenn der Tag schon auf HEAD zeigt)
 #
 # Pflicht-Check im Branch-Schutz: nur "<job im Adapter> / ci-result" (fasst alle Prüfungen zusammen).
 
@@ -247,10 +249,12 @@ jobs:
     # Alles in einem Job: Tags und Pushes mit GITHUB_TOKEN lösen keine weiteren Workflows aus.
     release:
         name: release
-        # Ein übersprungener Integrationstest (integration-command leer) blockiert das Release nicht
+        # Auch bei workflow_dispatch auf dem Standard-Branch, um ein abgebrochenes Release zu vervollständigen.
+        # Ein übersprungener Integrationstest (integration-command leer) blockiert das Release nicht.
         if: >-
             !cancelled()
-            && github.event_name == 'push' && github.ref == format('refs/heads/{0}', inputs.default-branch)
+            && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+            && github.ref == format('refs/heads/{0}', inputs.default-branch)
             && needs.check.result == 'success' && needs.install.result == 'success'
             && contains(fromJSON('["success", "skipped"]'), needs.integration.result)
         needs: [check, integration, install]
@@ -315,12 +319,21 @@ jobs:
               id: pack
               if: steps.plan.outputs.release == 'true' && inputs.prebuilt-package
               run: |
-                  # npm ci führt "prepare" (Build) aus; npm pack danach ohne Skripte, damit die Ausgabe reines JSON ist
+                  # npm pack führt "prepare" (Build) auch mit --ignore-scripts aus, und dessen Ausgabe landet auf
+                  # stdout. Den Dateinamen deshalb nicht aus der Ausgabe lesen, sondern aus dem leeren Zielordner.
                   npm ci
-                  mkdir -p "$RUNNER_TEMP/pack"
-                  file=$(npm pack --ignore-scripts --json --pack-destination "$RUNNER_TEMP/pack" | node -p 'JSON.parse(require("fs").readFileSync(0, "utf8"))[0].filename')
-                  echo "file=$RUNNER_TEMP/pack/$file" >> "$GITHUB_OUTPUT"
-                  tar -tzf "$RUNNER_TEMP/pack/$file" | sort
+                  dest="$RUNNER_TEMP/pack"
+                  rm -rf "$dest"
+                  mkdir -p "$dest"
+                  npm pack --pack-destination "$dest"
+                  shopt -s nullglob
+                  files=("$dest"/*.tgz)
+                  if [ ${#files[@]} -ne 1 ]; then
+                      echo "::error::npm pack hat ${#files[@]} statt einer .tgz-Datei erzeugt"
+                      exit 1
+                  fi
+                  echo "file=${files[0]}" >> "$GITHUB_OUTPUT"
+                  tar -tzf "${files[0]}" | sort
 
             - name: GitHub-Release
               if: steps.plan.outputs.release == 'true'

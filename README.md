@@ -24,7 +24,7 @@ Releases nach einem Merge. Jeder Adapter bindet sie über eine kurze `.github/wo
 | `audit` | immer | `npm audit --omit=dev --audit-level=high` |
 | `release-guard` | Pull Requests | Versionsregeln, siehe unten |
 | `ci-result` | immer | Fasst alle Jobs zusammen, **der einzige Pflicht-Check** im Branch-Schutz |
-| `release` | Push auf den Standard-Branch | nach grünem `check`, `integration` und `install`, siehe unten |
+| `release` | Push oder `workflow_dispatch` auf den Standard-Branch | nach grünem `check`, `integration` und `install`, siehe unten |
 
 Pull Requests und Pushes laufen nur auf Linux mit Node 22/24 (Integrationstest einmal auf Node 22). Der wöchentliche
 Lauf (`schedule`) und ein manueller Start (`workflow_dispatch`) nutzen die volle Matrix: Linux und Windows mit
@@ -78,7 +78,9 @@ gibt. Zeigt er auf einen älteren Commit, z. B. nach einem Merge ohne Versionssp
 5. spult den Branch `release` auf den Tag vor, ohne Force-Push. Beim ersten Release wird der Branch angelegt.
 
 Alles läuft in einem Job, weil Tags und Pushes mit `GITHUB_TOKEN` keine weiteren Workflows auslösen. Schlägt ein
-Schritt fehl, schließt ein erneuter Start des Jobs das Release ab.
+Schritt fehl, nachdem der Tag gesetzt ist, schließt ein neuer Lauf das Release ab: im Adapter unter Actions den
+Workflow „Test" auf dem Standard-Branch per „Run workflow" starten (`workflow_dispatch`). Zeigt der Tag auf HEAD,
+holt der Job das GitHub-Release, das `.tgz` und den Branch `release` nach.
 
 ### Installationswege für Nutzer
 
