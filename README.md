@@ -137,5 +137,10 @@ Adapter binden `@v1` ein. `v1` ist ein beweglicher Tag auf dem neuesten kompatib
 Änderungen, z. B. neue Pflicht-Parameter oder geänderte Job-Namen, bekommen `v2`, und dabei ändert sich der
 Standard von `tools-ref`.
 
-Tests: `node --test test/*.test.mjs`. Der Workflow [Self-test](.github/workflows/self-test.yml) führt zusätzlich
-actionlint aus.
+Die Tags werden nicht von Hand gesetzt: Nach einem Merge auf `main` setzt der Workflow
+[Self-test](.github/workflows/self-test.yml) bei grünen Tests den Tag `vX.Y.Z` aus `package.json`, sofern er fehlt,
+und zieht den Major-Tag (`v1`) auf diesen Stand. Für einen neuen Stand also im Pull Request die Version in
+`package.json` erhöhen: Patch für Korrekturen, Minor für neue Parameter oder Prüfungen, Major für inkompatible
+Änderungen.
+
+Tests: `npm test`. Der Self-test führt zusätzlich actionlint aus.
