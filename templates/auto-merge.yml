@@ -1,0 +1,7 @@
+# Vorlage für .github/auto-merge.yml (iobroker-bot-orga/action-automerge-dependabot).
+# Automatisch gemergt werden nur Entwicklungs-Abhängigkeiten. Updates von Laufzeit-Abhängigkeiten
+# landen im Adapter beim Nutzer und brauchen deshalb eine neue Version (release-guard verlangt sie):
+# den Dependabot-PR um einen Patch-Release ergänzen und von Hand mergen.
+- match:
+      dependency_type: development
+      update_type: "semver:minor"

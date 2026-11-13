@@ -1,0 +1,356 @@
+# Wiederverwendbarer Workflow für ioBroker-Adapter: Prüfungen und Release.
+#
+# Aufruf aus der test.yml eines Adapters, siehe templates/test.yml und README.md.
+#
+#   pull_request        check, integration, install, audit, release-guard
+#   push (Standard-Br.) check, integration, install, audit, danach release
+#   schedule/dispatch   volle Matrix (Linux + Windows, alle Node-Versionen), kein Release
+#
+# Pflicht-Check im Branch-Schutz: nur "<job im Adapter> / ci-result" (fasst alle Prüfungen zusammen).
+
+name: ioBroker adapter
+
+on:
+    workflow_call:
+        inputs:
+            default-branch:
+                description: Standard-Branch des Adapters (main oder master)
+                type: string
+                default: main
+            build:
+                description: TypeScript-Adapter mit "check"- und "build"-Skript
+                type: boolean
+                default: false
+            node-versions:
+                description: Node-Versionen für check bei Pull Requests und Pushes (JSON-Liste)
+                type: string
+                default: '["22", "24"]'
+            integration-node:
+                description: Node-Version für Integrations-, Installationstest und Release
+                type: string
+                default: '22'
+            weekly-node-versions:
+                description: Node-Versionen beim wöchentlichen Lauf (JSON-Liste)
+                type: string
+                default: '["22", "24", "26"]'
+            weekly-os:
+                description: Betriebssysteme beim wöchentlichen Lauf (JSON-Liste)
+                type: string
+                default: '["ubuntu-latest", "windows-latest"]'
+            lint-command:
+                description: Lint-Befehl, leer zum Überspringen
+                type: string
+                default: npm run lint
+            test-command:
+                description: Unit- und Paket-Tests
+                type: string
+                default: npm test
+            integration-command:
+                description: Integrationstest, leer zum Überspringen
+                type: string
+                default: npm run test:integration
+            extra-runtime-paths:
+                description: >-
+                    Pfade, die zusätzlich zu "files"/"main" aus package.json als ausgeliefert gelten
+                    (Leerzeichen-getrennt), z. B. die TypeScript-Quellen
+                type: string
+                default: src/
+            audit-level:
+                description: Schwelle für npm audit der Laufzeit-Abhängigkeiten (low, moderate, high, critical)
+                type: string
+                default: high
+            prebuilt-package:
+                description: Fertig gebautes .tgz (npm pack) an das GitHub-Release hängen
+                type: boolean
+                default: false
+            release-branch:
+                description: Branch, der bei jedem Release auf den Tag vorgespult wird, leer zum Abschalten
+                type: string
+                default: release
+            tools-repository:
+                description: Repository mit scripts/check-release.mjs
+                type: string
+                default: Exc3pt10n/ioBroker-workflows
+            tools-ref:
+                description: Stand von tools-repository, sollte zum Tag passen, mit dem dieser Workflow eingebunden ist
+                type: string
+                default: v1
+
+permissions:
+    contents: read
+
+defaults:
+    run:
+        shell: bash
+
+env:
+    NPM_CONFIG_FUND: 'false'
+    NPM_CONFIG_UPDATE_NOTIFIER: 'false'
+
+jobs:
+    # Lint, Typprüfung, Build und schnelle Tests je Node-Version
+    check:
+        name: check (Node ${{ matrix.node-version }}, ${{ matrix.os }})
+        runs-on: ${{ matrix.os }}
+        timeout-minutes: 20
+        strategy:
+            fail-fast: false
+            matrix:
+                os: ${{ fromJSON((github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && inputs.weekly-os || '["ubuntu-latest"]') }}
+                node-version: ${{ fromJSON((github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && inputs.weekly-node-versions || inputs.node-versions) }}
+        steps:
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  persist-credentials: false
+            - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+              with:
+                  node-version: ${{ matrix.node-version }}
+                  cache: npm
+            - run: npm ci
+            - name: Lint
+              if: inputs.lint-command != ''
+              run: ${{ inputs.lint-command }}
+            - name: Typprüfung
+              if: inputs.build
+              run: npm run check
+            - name: Build
+              if: inputs.build
+              run: npm run build
+            - name: Tests
+              run: ${{ inputs.test-command }}
+
+    # Integrationstest mit echter js-controller-Instanz; wöchentlich auf allen Systemen
+    integration:
+        name: integration (Node ${{ matrix.node-version }}, ${{ matrix.os }})
+        if: inputs.integration-command != ''
+        runs-on: ${{ matrix.os }}
+        timeout-minutes: 20
+        strategy:
+            fail-fast: false
+            matrix:
+                os: ${{ fromJSON((github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && inputs.weekly-os || '["ubuntu-latest"]') }}
+                node-version: ${{ fromJSON((github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && inputs.weekly-node-versions || format('["{0}"]', inputs.integration-node)) }}
+        steps:
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  persist-credentials: false
+            - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+              with:
+                  node-version: ${{ matrix.node-version }}
+                  cache: npm
+            - run: npm ci
+            - name: Build
+              if: inputs.build
+              run: npm run build
+            - name: Integrationstest
+              run: ${{ inputs.integration-command }}
+
+    # Installation auf demselben Weg wie "iobroker url": npm installiert das Repo als
+    # Git-Abhängigkeit (mit "prepare"), danach muss das ausgelieferte Paket vollständig sein.
+    install:
+        name: install (wie iobroker url)
+        runs-on: ubuntu-latest
+        timeout-minutes: 20
+        steps:
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  persist-credentials: false
+            - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+              with:
+                  node-version: ${{ inputs.integration-node }}
+            - name: Aus Git installieren
+              run: |
+                  name=$(node -p "require('./package.json').name")
+                  main=$(node -p "require('./package.json').main || 'main.js'")
+                  # Bei Pull Requests ist HEAD ein losgelöster Merge-Commit; ein Branch macht ihn für git clone sichtbar
+                  git branch -f ci-install-test HEAD
+                  dir=$(mktemp -d)
+                  cd "$dir"
+                  npm init -y >/dev/null
+                  npm install --omit=dev --no-audit "git+file://$GITHUB_WORKSPACE#ci-install-test"
+                  pkg="node_modules/$name"
+                  ls -la "$pkg"
+                  missing=0
+                  for f in "${main#./}" io-package.json package.json; do
+                      if [ ! -f "$pkg/$f" ]; then
+                          echo "::error::$f fehlt im installierten Paket (main, files oder prepare prüfen)"
+                          missing=1
+                      fi
+                  done
+                  if [ "$(node -p "require('./$pkg/package.json').name")" != "$name" ]; then
+                      echo "::error::Installiertes Paket heißt nicht $name"
+                      missing=1
+                  fi
+                  exit "$missing"
+
+    # Bekannte Sicherheitslücken in Laufzeit-Abhängigkeiten
+    audit:
+        name: npm audit
+        runs-on: ubuntu-latest
+        timeout-minutes: 10
+        steps:
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  persist-credentials: false
+            - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+              with:
+                  node-version: ${{ inputs.integration-node }}
+            - run: npm audit --omit=dev --audit-level="$AUDIT_LEVEL"
+              env:
+                  AUDIT_LEVEL: ${{ inputs.audit-level }}
+
+    # Versionsregeln: ändert der Pull Request das ausgelieferte Paket, braucht er eine vollständige neue Version
+    release-guard:
+        name: release-guard
+        if: github.event_name == 'pull_request'
+        runs-on: ubuntu-latest
+        timeout-minutes: 10
+        steps:
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  fetch-depth: 0
+                  persist-credentials: false
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  repository: ${{ inputs.tools-repository }}
+                  ref: ${{ inputs.tools-ref }}
+                  path: ${{ runner.temp }}/iobroker-workflows
+                  persist-credentials: false
+            - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+              with:
+                  node-version: ${{ inputs.integration-node }}
+            - name: Version prüfen
+              run: node "$RUNNER_TEMP/iobroker-workflows/scripts/check-release.mjs" pr --base "$BASE_SHA" --extra-runtime-paths "$EXTRA_PATHS"
+              env:
+                  BASE_SHA: ${{ github.event.pull_request.base.sha }}
+                  EXTRA_PATHS: ${{ inputs.extra-runtime-paths }}
+
+    # Ein einziger Pflicht-Check für den Branch-Schutz
+    ci-result:
+        name: ci-result
+        if: always()
+        needs: [check, integration, install, audit, release-guard]
+        runs-on: ubuntu-latest
+        timeout-minutes: 5
+        steps:
+            - name: Ergebnis
+              env:
+                  RESULTS: ${{ toJSON(needs) }}
+              run: |
+                  echo "$RESULTS" | node -e '
+                      const needs = JSON.parse(require("fs").readFileSync(0, "utf8"));
+                      let ok = true;
+                      for (const [job, { result }] of Object.entries(needs)) {
+                          console.log(`${job}: ${result}`);
+                          if (result !== "success" && result !== "skipped") ok = false;
+                      }
+                      if (!ok) { console.log("::error::Mindestens eine Prüfung ist fehlgeschlagen"); process.exit(1); }
+                  '
+
+    # Release nach grüner CI auf dem Standard-Branch, nur wenn der Versions-Tag noch fehlt.
+    # Alles in einem Job: Tags und Pushes mit GITHUB_TOKEN lösen keine weiteren Workflows aus.
+    release:
+        name: release
+        # Ein übersprungener Integrationstest (integration-command leer) blockiert das Release nicht
+        if: >-
+            !cancelled()
+            && github.event_name == 'push' && github.ref == format('refs/heads/{0}', inputs.default-branch)
+            && needs.check.result == 'success' && needs.install.result == 'success'
+            && contains(fromJSON('["success", "skipped"]'), needs.integration.result)
+        needs: [check, integration, install]
+        runs-on: ubuntu-latest
+        timeout-minutes: 20
+        permissions:
+            contents: write
+        concurrency:
+            group: release-${{ github.repository }}
+            cancel-in-progress: false
+        steps:
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  fetch-depth: 0
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  repository: ${{ inputs.tools-repository }}
+                  ref: ${{ inputs.tools-ref }}
+                  path: ${{ runner.temp }}/iobroker-workflows
+                  persist-credentials: false
+            - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+              with:
+                  node-version: ${{ inputs.integration-node }}
+                  cache: ${{ inputs.prebuilt-package && 'npm' || '' }}
+
+            - name: Release nötig?
+              id: plan
+              run: |
+                  version=$(node -p "require('./package.json').version")
+                  tag="v$version"
+                  head=$(git rev-parse HEAD)
+                  {
+                      echo "version=$version"
+                      echo "tag=$tag"
+                  } >> "$GITHUB_OUTPUT"
+                  if tagged=$(git rev-parse -q --verify "refs/tags/$tag^{commit}"); then
+                      if [ "$tagged" != "$head" ]; then
+                          echo "::notice::$tag existiert bereits auf ${tagged:0:7}, dieser Push ist kein Release"
+                          echo "release=false" >> "$GITHUB_OUTPUT"
+                          exit 0
+                      fi
+                      echo "$tag zeigt bereits auf diesen Commit, Release wird vervollständigt"
+                      echo "tag-exists=true" >> "$GITHUB_OUTPUT"
+                  fi
+                  echo "release=true" >> "$GITHUB_OUTPUT"
+
+            - name: Version prüfen
+              if: steps.plan.outputs.release == 'true'
+              run: node "$RUNNER_TEMP/iobroker-workflows/scripts/check-release.mjs" verify
+
+            - name: Tag setzen
+              if: steps.plan.outputs.release == 'true' && steps.plan.outputs.tag-exists != 'true'
+              env:
+                  TAG: ${{ steps.plan.outputs.tag }}
+              run: |
+                  git config user.name "github-actions[bot]"
+                  git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+                  git tag -a "$TAG" -m "$TAG"
+                  git push origin "refs/tags/$TAG"
+
+            - name: Paket bauen
+              id: pack
+              if: steps.plan.outputs.release == 'true' && inputs.prebuilt-package
+              run: |
+                  # npm ci führt "prepare" (Build) aus; npm pack danach ohne Skripte, damit die Ausgabe reines JSON ist
+                  npm ci
+                  mkdir -p "$RUNNER_TEMP/pack"
+                  file=$(npm pack --ignore-scripts --json --pack-destination "$RUNNER_TEMP/pack" | node -p 'JSON.parse(require("fs").readFileSync(0, "utf8"))[0].filename')
+                  echo "file=$RUNNER_TEMP/pack/$file" >> "$GITHUB_OUTPUT"
+                  tar -tzf "$RUNNER_TEMP/pack/$file" | sort
+
+            - name: GitHub-Release
+              if: steps.plan.outputs.release == 'true'
+              env:
+                  GH_TOKEN: ${{ github.token }}
+                  TAG: ${{ steps.plan.outputs.tag }}
+                  VERSION: ${{ steps.plan.outputs.version }}
+                  ASSET: ${{ steps.pack.outputs.file }}
+              run: |
+                  node "$RUNNER_TEMP/iobroker-workflows/scripts/check-release.mjs" notes "$VERSION" > "$RUNNER_TEMP/notes.md"
+                  cat "$RUNNER_TEMP/notes.md"
+                  assets=()
+                  if [ -n "$ASSET" ]; then assets+=("$ASSET"); fi
+                  if gh release view "$TAG" >/dev/null 2>&1; then
+                      echo "Release $TAG existiert bereits"
+                      if [ ${#assets[@]} -gt 0 ]; then gh release upload "$TAG" "${assets[@]}" --clobber; fi
+                  else
+                      flags=()
+                      if [[ "$VERSION" == *-* ]]; then flags+=(--prerelease); fi
+                      gh release create "$TAG" --verify-tag --title "$TAG" --notes-file "$RUNNER_TEMP/notes.md" "${flags[@]}" "${assets[@]}"
+                  fi
+
+            - name: Release-Branch vorspulen
+              if: steps.plan.outputs.release == 'true' && inputs.release-branch != ''
+              env:
+                  BRANCH: ${{ inputs.release-branch }}
+              run: |
+                  # Ohne --force: Der Push schlägt fehl, wenn es kein reines Vorspulen ist
+                  git push origin "HEAD:refs/heads/$BRANCH"

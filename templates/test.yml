@@ -1,0 +1,34 @@
+# Vorlage für .github/workflows/test.yml eines Adapters.
+# Ersetzt test.yml und tag-release.yml. Anpassen: default-branch, build, prebuilt-package.
+name: Test
+
+on:
+    push:
+        branches: [main]
+    pull_request:
+    schedule:
+        # Wöchentlich mit voller Matrix (Linux + Windows, Node 22/24/26)
+        - cron: '23 3 * * 1'
+    workflow_dispatch:
+
+# Neuer Push auf denselben Pull Request bricht den älteren Lauf ab; Läufe auf dem
+# Standard-Branch laufen zu Ende, damit kein Release mittendrin abgebrochen wird
+concurrency:
+    group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+    cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+    contents: read
+
+jobs:
+    adapter:
+        uses: Exc3pt10n/ioBroker-workflows/.github/workflows/adapter.yml@v1
+        # Schreibrecht braucht nur der Release-Job (Tag, GitHub-Release, Branch "release")
+        permissions:
+            contents: write
+        with:
+            default-branch: main
+            # TypeScript-Adapter: true (führt "npm run check" und "npm run build" aus)
+            build: false
+            # Fertig gebautes .tgz am GitHub-Release, lohnt vor allem bei TypeScript-Adaptern
+            prebuilt-package: false
