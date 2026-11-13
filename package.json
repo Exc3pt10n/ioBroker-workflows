@@ -1,6 +1,6 @@
 {
     "name": "iobroker-workflows",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "private": true,
     "description": "Gemeinsame GitHub-Workflows für die ioBroker-Adapter von Exc3pt10n",
     "license": "MIT",

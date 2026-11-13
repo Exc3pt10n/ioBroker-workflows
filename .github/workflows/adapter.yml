@@ -210,12 +210,12 @@ jobs:
               with:
                   fetch-depth: 0
                   persist-credentials: false
-            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-              with:
-                  repository: ${{ inputs.tools-repository }}
-                  ref: ${{ inputs.tools-ref }}
-                  path: ${{ runner.temp }}/iobroker-workflows
-                  persist-credentials: false
+            # Außerhalb des Workspace (actions/checkout erlaubt das nicht), damit der Adapter unverändert bleibt
+            - name: check-release.mjs holen
+              env:
+                  TOOLS_REPOSITORY: ${{ inputs.tools-repository }}
+                  TOOLS_REF: ${{ inputs.tools-ref }}
+              run: git -c advice.detachedHead=false clone --quiet --depth 1 --branch "$TOOLS_REF" "https://github.com/$TOOLS_REPOSITORY.git" "$RUNNER_TEMP/iobroker-workflows"
             - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
               with:
                   node-version: ${{ inputs.integration-node }}
@@ -265,12 +265,12 @@ jobs:
             - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
               with:
                   fetch-depth: 0
-            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-              with:
-                  repository: ${{ inputs.tools-repository }}
-                  ref: ${{ inputs.tools-ref }}
-                  path: ${{ runner.temp }}/iobroker-workflows
-                  persist-credentials: false
+            # Außerhalb des Workspace (actions/checkout erlaubt das nicht), damit der Adapter unverändert bleibt
+            - name: check-release.mjs holen
+              env:
+                  TOOLS_REPOSITORY: ${{ inputs.tools-repository }}
+                  TOOLS_REF: ${{ inputs.tools-ref }}
+              run: git -c advice.detachedHead=false clone --quiet --depth 1 --branch "$TOOLS_REF" "https://github.com/$TOOLS_REPOSITORY.git" "$RUNNER_TEMP/iobroker-workflows"
             - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
               with:
                   node-version: ${{ inputs.integration-node }}
