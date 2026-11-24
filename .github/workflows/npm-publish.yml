@@ -1,0 +1,104 @@
+# Wiederverwendbarer Workflow: veröffentlicht das fertig gebaute Paket eines GitHub-Release auf npm.
+#
+# Aufruf aus der Workflow-Datei des Adapters nach adapter.yml (siehe templates/test-and-release-npm.yml):
+#
+#   npm:
+#       needs: adapter
+#       if: needs.adapter.outputs.released == 'true'
+#       uses: Exc3pt10n/ioBroker-workflows/.github/workflows/npm-publish.yml@v1
+#       permissions:
+#           contents: read
+#           id-token: write
+#       with:
+#           version: ${{ needs.adapter.outputs.version }}
+#
+# Anmeldung bei npm über "Trusted Publishing" (OIDC): kein Token im Repository. Auf npmjs.com muss beim Paket
+# (Settings → Trusted publishing) GitHub Actions mit Owner, Repository und der Workflow-Datei des Adapters
+# (z. B. test-and-release.yml) eingetragen sein. Veröffentlicht wird genau das .tgz, das am GitHub-Release hängt
+# (adapter.yml mit prebuilt-package: true); npm erzeugt dabei die Provenance-Angabe.
+
+name: npm publish
+
+on:
+    workflow_call:
+        inputs:
+            version:
+                description: Version ohne "v" (Tag v<version> mit .tgz am GitHub-Release)
+                type: string
+                required: true
+            node-version:
+                description: Node-Version (npm >= 11.5.1 für Trusted Publishing wird bei Bedarf nachinstalliert)
+                type: string
+                default: '24'
+
+permissions:
+    contents: read
+
+defaults:
+    run:
+        shell: bash
+
+jobs:
+    publish:
+        name: npm publish
+        runs-on: ubuntu-latest
+        timeout-minutes: 15
+        permissions:
+            contents: read
+            id-token: write
+        concurrency:
+            group: npm-publish-${{ github.repository }}
+            cancel-in-progress: false
+        steps:
+            - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+              with:
+                  node-version: ${{ inputs.node-version }}
+                  registry-url: https://registry.npmjs.org
+            - name: npm für Trusted Publishing
+              run: |
+                  current=$(npm -v)
+                  if [ "$(printf '%s\n' 11.5.1 "$current" | sort -V | head -n1)" != 11.5.1 ]; then
+                      npm install -g npm@11
+                  fi
+                  npm -v
+            - name: Paket vom GitHub-Release holen
+              id: pkg
+              env:
+                  GH_TOKEN: ${{ github.token }}
+                  VERSION: ${{ inputs.version }}
+              run: |
+                  dest="$RUNNER_TEMP/pkg"
+                  mkdir -p "$dest"
+                  gh release download "v$VERSION" --repo "$GITHUB_REPOSITORY" --pattern '*.tgz' --dir "$dest"
+                  shopt -s nullglob
+                  files=("$dest"/*.tgz)
+                  if [ ${#files[@]} -ne 1 ]; then
+                      echo "::error::Am Release v$VERSION hängen ${#files[@]} statt einer .tgz-Datei (prebuilt-package: true?)"
+                      exit 1
+                  fi
+                  meta=$(tar -xzOf "${files[0]}" package/package.json)
+                  name=$(node -p 'JSON.parse(process.argv[1]).name' "$meta")
+                  packed=$(node -p 'JSON.parse(process.argv[1]).version' "$meta")
+                  if [ "$packed" != "$VERSION" ]; then
+                      echo "::error::Das Paket hat Version $packed, erwartet $VERSION"
+                      exit 1
+                  fi
+                  {
+                      echo "file=${files[0]}"
+                      echo "name=$name"
+                  } >> "$GITHUB_OUTPUT"
+            - name: Veröffentlichen
+              env:
+                  FILE: ${{ steps.pkg.outputs.file }}
+                  NAME: ${{ steps.pkg.outputs.name }}
+                  VERSION: ${{ inputs.version }}
+              run: |
+                  # Schon veröffentlicht (z. B. erneuter Lauf, um ein abgebrochenes Release zu vervollständigen)?
+                  if [ "$(npm view "$NAME@$VERSION" version 2>/dev/null)" = "$VERSION" ]; then
+                      echo "::notice::$NAME@$VERSION ist bereits auf npm"
+                      exit 0
+                  fi
+                  flags=(--access public --provenance)
+                  # Vorabversionen nicht als "latest" markieren
+                  if [[ "$VERSION" == *-* ]]; then flags+=(--tag next); fi
+                  npm publish "$FILE" "${flags[@]}"

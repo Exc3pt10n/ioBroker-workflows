@@ -65,6 +65,13 @@ on:
                 description: Fertig gebautes .tgz (npm pack) an das GitHub-Release hängen
                 type: boolean
                 default: false
+            npm-package:
+                description: >-
+                    Verteilung über npm bzw. das ioBroker-Repository statt Installation aus GitHub: kein "prepare",
+                    common.nogit erlaubt, höchstens 7 news; der Installationstest nutzt das gepackte Paket.
+                    Veröffentlicht wird mit npm-publish.yml (eigener Aufruf, braucht id-token: write)
+                type: boolean
+                default: false
             release-branch:
                 description: Branch, der bei jedem Release auf den Tag vorgespult wird, leer zum Abschalten
                 type: string
@@ -77,6 +84,13 @@ on:
                 description: Stand von tools-repository, sollte zum Tag passen, mit dem dieser Workflow eingebunden ist
                 type: string
                 default: v1
+        outputs:
+            released:
+                description: '"true", wenn dieser Lauf ein Release angelegt oder vervollständigt hat'
+                value: ${{ jobs.release.outputs.released }}
+            version:
+                description: Version des Releases (ohne "v")
+                value: ${{ jobs.release.outputs.version }}
 
 permissions:
     contents: read
@@ -161,10 +175,10 @@ jobs:
             - name: Integrationstest
               run: ${{ inputs.integration-command }}
 
-    # Installation auf demselben Weg wie "iobroker url": npm installiert das Repo als
-    # Git-Abhängigkeit (mit "prepare"), danach muss das ausgelieferte Paket vollständig sein.
+    # Installation wie beim Nutzer: aus Git ("iobroker url", npm baut über "prepare") bzw. bei npm-package aus dem
+    # gepackten Paket (wie aus dem npm-Registry). Danach muss das ausgelieferte Paket vollständig sein.
     install:
-        name: install (wie iobroker url)
+        name: ${{ inputs.npm-package && 'install (npm-Paket)' || 'install (wie iobroker url)' }}
         runs-on: ubuntu-latest
         timeout-minutes: 20
         steps:
@@ -174,22 +188,47 @@ jobs:
             - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
               with:
                   node-version: ${{ inputs.integration-node }}
-            - name: Aus Git installieren
+            - name: Paket bauen
+              id: pack
+              if: inputs.npm-package
+              env:
+                  BUILD: ${{ inputs.build }}
+              run: |
+                  npm ci
+                  if [ "$BUILD" = "true" ]; then npm run build; fi
+                  dest="$RUNNER_TEMP/pack"
+                  mkdir -p "$dest"
+                  npm pack --pack-destination "$dest" >/dev/null
+                  shopt -s nullglob
+                  files=("$dest"/*.tgz)
+                  if [ ${#files[@]} -ne 1 ]; then
+                      echo "::error::npm pack hat ${#files[@]} statt einer .tgz-Datei erzeugt"
+                      exit 1
+                  fi
+                  echo "file=${files[0]}" >> "$GITHUB_OUTPUT"
+            - name: Installieren und prüfen
+              env:
+                  TGZ: ${{ steps.pack.outputs.file }}
               run: |
                   name=$(node -p "require('./package.json').name")
                   main=$(node -p "require('./package.json').main || 'main.js'")
-                  # Bei Pull Requests ist HEAD ein losgelöster Merge-Commit; ein Branch macht ihn für git clone sichtbar
-                  git branch -f ci-install-test HEAD
+                  if [ -n "$TGZ" ]; then
+                      source="$TGZ"
+                  else
+                      # Bei Pull Requests ist HEAD ein losgelöster Merge-Commit; ein Branch macht ihn für git clone sichtbar
+                      git branch -f ci-install-test HEAD
+                      source="git+file://$GITHUB_WORKSPACE#ci-install-test"
+                  fi
                   dir=$(mktemp -d)
                   cd "$dir"
                   npm init -y >/dev/null
-                  npm install --omit=dev --no-audit "git+file://$GITHUB_WORKSPACE#ci-install-test"
+                  npm install --omit=dev --no-audit "$source"
                   pkg="node_modules/$name"
                   ls -la "$pkg"
                   missing=0
                   for f in "${main#./}" io-package.json package.json; do
                       if [ ! -f "$pkg/$f" ]; then
-                          echo "::error::$f fehlt im installierten Paket (main, files oder prepare prüfen)"
+                          echo "::error::$f fehlt im installierten Paket (main, files oder Build prüfen)"
                           missing=1
                       fi
                   done
@@ -236,10 +275,11 @@ jobs:
               with:
                   node-version: ${{ inputs.integration-node }}
             - name: Version prüfen
-              run: node "$RUNNER_TEMP/iobroker-workflows/scripts/check-release.mjs" pr --base "$BASE_SHA" --extra-runtime-paths "$EXTRA_PATHS"
+              run: node "$RUNNER_TEMP/iobroker-workflows/scripts/check-release.mjs" pr --base "$BASE_SHA" --extra-runtime-paths "$EXTRA_PATHS" --npm-package "$NPM_PACKAGE"
               env:
                   BASE_SHA: ${{ github.event.pull_request.base.sha }}
                   EXTRA_PATHS: ${{ inputs.extra-runtime-paths }}
+                  NPM_PACKAGE: ${{ inputs.npm-package }}
 
     # Ein einziger Pflicht-Check für den Branch-Schutz
     ci-result:
@@ -276,6 +316,9 @@ jobs:
         timeout-minutes: 20
         permissions:
             contents: write
+        outputs:
+            released: ${{ steps.plan.outputs.release }}
+            version: ${{ steps.plan.outputs.version }}
         concurrency:
             group: release-${{ github.repository }}
             cancel-in-progress: false
@@ -317,7 +360,9 @@ jobs:
 
             - name: Version prüfen
               if: steps.plan.outputs.release == 'true'
-              run: node "$RUNNER_TEMP/iobroker-workflows/scripts/check-release.mjs" verify
+              run: node "$RUNNER_TEMP/iobroker-workflows/scripts/check-release.mjs" verify --npm-package "$NPM_PACKAGE"
+              env:
+                  NPM_PACKAGE: ${{ inputs.npm-package }}
 
             - name: Tag setzen
               if: steps.plan.outputs.release == 'true' && steps.plan.outputs.tag-exists != 'true'
@@ -332,10 +377,14 @@ jobs:
             - name: Paket bauen
               id: pack
               if: steps.plan.outputs.release == 'true' && inputs.prebuilt-package
+              env:
+                  BUILD: ${{ inputs.npm-package && inputs.build }}
               run: |
                   # npm pack führt "prepare" (Build) auch mit --ignore-scripts aus, und dessen Ausgabe landet auf
                   # stdout. Den Dateinamen deshalb nicht aus der Ausgabe lesen, sondern aus dem leeren Zielordner.
+                  # Ohne "prepare" (npm-package) wird vorher ausdrücklich gebaut.
                   npm ci
+                  if [ "$BUILD" = "true" ]; then npm run build; fi
                   dest="$RUNNER_TEMP/pack"
                   rm -rf "$dest"
                   mkdir -p "$dest"
