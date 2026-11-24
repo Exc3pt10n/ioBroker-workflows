@@ -142,6 +142,12 @@ Einmalig je Adapter:
 2. Auf npmjs.com beim Paket unter Settings → Trusted publishing „GitHub Actions" mit Owner, Repository und der
    Workflow-Datei des Adapters (`test-and-release.yml`) eintragen.
 3. `release-branch: ''` setzen: Ohne Build im Repository lässt sich der Branch nicht aus GitHub installieren.
+4. Für den ioBroker-Repochecker (E3032 „kein Lauf durch den Tag ausgelöst“): Repository-Secret `RELEASE_TOKEN`
+   anlegen und als `secrets: release-token` übergeben (siehe Vorlage). Geeignet ist ein fine-grained Personal Access
+   Token nur für dieses Repository mit „Contents: Read and write“. Der Release-Job pusht den Tag dann mit diesem
+   Token, und GitHub startet dafür einen eigenen Lauf (`push` auf `refs/tags/vX.Y.Z`): Er prüft, released aber
+   nicht (nur auf dem Standard-Branch) und veröffentlicht nicht. Mit `GITHUB_TOKEN` gepushte Tags lösen keine Läufe
+   aus. Das Token läuft je nach Einstellung ab und muss dann erneuert werden.
 
 ## Umstellung eines Adapters
 

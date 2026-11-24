@@ -84,6 +84,13 @@ on:
                 description: Stand von tools-repository, sollte zum Tag passen, mit dem dieser Workflow eingebunden ist
                 type: string
                 default: v1
+        secrets:
+            release-token:
+                description: >-
+                    Optional: Token (fine-grained PAT oder GitHub-App) mit "Contents: Read and write" für dieses Repo.
+                    Damit gepushte Tags lösen einen eigenen Workflow-Lauf aus (mit GITHUB_TOKEN nicht); den verlangt
+                    der ioBroker-Repochecker (E3032). Ohne Token bleibt alles wie bisher.
+                required: false
         outputs:
             released:
                 description: '"true", wenn dieser Lauf ein Release angelegt oder vervollständigt hat'
@@ -323,9 +330,12 @@ jobs:
             group: release-${{ github.repository }}
             cancel-in-progress: false
         steps:
+            # Mit release-token pushen Tag und Release-Branch über dieses Token: Dann startet der Tag einen eigenen
+            # Lauf (event "push" auf dem Tag), den der ioBroker-Repochecker erwartet. Ohne Token GITHUB_TOKEN.
             - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
               with:
                   fetch-depth: 0
+                  token: ${{ secrets.release-token || github.token }}
             # Außerhalb des Workspace (actions/checkout erlaubt das nicht), damit der Adapter unverändert bleibt
             - name: check-release.mjs holen
               env:

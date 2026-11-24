@@ -30,6 +30,9 @@ jobs:
         # Schreibrecht braucht nur der Release-Job (Tag, GitHub-Release)
         permissions:
             contents: write
+        # Token für den Tag-Push, damit der Tag einen eigenen Lauf auslöst (ioBroker-Repochecker E3032), optional
+        secrets:
+            release-token: ${{ secrets.RELEASE_TOKEN }}
         with:
             default-branch: main
             # TypeScript-Adapter: true (führt "npm run check" und "npm run build" aus)
