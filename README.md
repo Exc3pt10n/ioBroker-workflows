@@ -118,8 +118,11 @@ holt der Job das GitHub-Release, das `.tgz` und den Branch `release` nach.
 ## Veröffentlichung auf npm
 
 Für Adapter, die über npm und das ioBroker-Repository verteilt werden, statt aus GitHub gebaut zu werden.
-Vorlage: [templates/test-and-release-npm.yml](templates/test-and-release-npm.yml) (Dateiname `test-and-release.yml`,
-wie der ioBroker-Repochecker ihn erwartet).
+Vorlage: [templates/test-and-release-npm.yml](templates/test-and-release-npm.yml). Dateiname
+(`test-and-release.yml`), Job-Namen (`check-and-lint` ruft `adapter.yml` auf, `adapter-tests` mit der offiziellen
+`ioBroker/testing-action-adapter`, `deploy` ruft `npm-publish.yml` auf), Tag-Trigger und `concurrency` folgen dem
+ioBroker-Standard, damit der Repochecker die Datei akzeptiert. Der Pflicht-Check im Branch-Schutz heißt dann
+`check-and-lint / ci-result`.
 
 Mit `npm-package: true` ändert `adapter.yml`:
 
