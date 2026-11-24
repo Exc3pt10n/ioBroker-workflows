@@ -107,6 +107,20 @@ describe('checkConsistency', () => {
         const errors = checkConsistency(s);
         assert.equal(errors.length, 2, errors.join('\n'));
     });
+    it('npm-Paket: nogit erlaubt, prepare verboten, höchstens 7 news', () => {
+        const s = state('1.0.7', { newsVersions: Array.from({ length: 8 }, (_, i) => `1.0.${7 - i}`) });
+        s.ioPkg.common.nogit = true;
+        s.pkg.scripts = { prepare: 'npm run build' };
+        const errors = checkConsistency(s, { npmPackage: true });
+        assert.equal(errors.length, 2, errors.join('\n'));
+        assert.match(errors.join('\n'), /prepare/);
+        assert.match(errors.join('\n'), /höchstens 7/);
+        delete s.pkg.scripts.prepare;
+        s.ioPkg.common.news = Object.fromEntries(Object.entries(s.ioPkg.common.news).slice(0, 7));
+        assert.deepEqual(checkConsistency(s, { npmPackage: true }), []);
+        // Ohne npm-Modus bleibt nogit ein Fehler
+        assert.match(checkConsistency(s).join('\n'), /nogit/);
+    });
 });
 
 describe('checkPullRequest', () => {

@@ -1,12 +1,16 @@
 #!/usr/bin/env node
 // Release-Prüfung für ioBroker-Adapter (ohne Abhängigkeiten, Node >= 22).
 //
-//   node check-release.mjs pr --base <sha> [--extra-runtime-paths "src/"]
+//   node check-release.mjs pr --base <sha> [--extra-runtime-paths "src/"] [--npm-package true]
 //       Prüft einen Pull Request: Ändert er Code, der ausgeliefert wird, muss die Version
 //       steigen und überall konsistent sein (package.json, package-lock.json, io-package.json,
 //       common.news, README-Changelog).
-//   node check-release.mjs verify
+//   node check-release.mjs verify [--npm-package true]
 //       Prüft nur die Konsistenz der aktuellen Version (für den Release-Job).
+//
+//   --npm-package true: Der Adapter wird über npm bzw. das ioBroker-Repository verteilt statt aus GitHub gebaut.
+//       Dann ist common.nogit erlaubt, ein "prepare"-Skript dagegen nicht (lehnt der ioBroker-Repochecker ab), und
+//       common.news darf höchstens MAX_NEWS_REPOSITORY Einträge haben (der Repository-Builder kürzt sonst).
 //   node check-release.mjs notes <version>
 //       Gibt den README-Changelog-Abschnitt der Version aus (Release-Notes).
 
@@ -16,6 +20,7 @@ import { pathToFileURL } from 'node:url';
 
 export const NEWS_LANGUAGES = ['en', 'de', 'ru', 'pt', 'nl', 'fr', 'it', 'es', 'pl', 'uk', 'zh-cn'];
 export const MAX_NEWS = 20;
+export const MAX_NEWS_REPOSITORY = 7;
 
 // Felder in package.json, die das ausgelieferte Paket betreffen
 const RUNTIME_PACKAGE_FIELDS = [
@@ -84,8 +89,13 @@ export function changelogSection(readme, version) {
     return lines.slice(start + 1, end).join('\n').trim();
 }
 
-/** Konsistenz der Version in allen Dateien. Liefert eine Liste von Fehlern. */
-export function checkConsistency({ pkg, lock, ioPkg, readme }) {
+/**
+ * Konsistenz der Version in allen Dateien. Liefert eine Liste von Fehlern.
+ * @param {object} head { pkg, lock, ioPkg, readme }
+ * @param {object} [options]
+ * @param {boolean} [options.npmPackage] Verteilung über npm statt Installation aus GitHub
+ */
+export function checkConsistency({ pkg, lock, ioPkg, readme }, { npmPackage = false } = {}) {
     const errors = [];
     const version = pkg.version;
     if (!parseVersion(version)) {
@@ -101,7 +111,13 @@ export function checkConsistency({ pkg, lock, ioPkg, readme }) {
     }
     const common = ioPkg?.common ?? {};
     if (common.version !== version) errors.push(`io-package.json: common.version ist ${common.version}, erwartet ${version}`);
-    if (common.nogit) errors.push('io-package.json: common.nogit ist gesetzt, die Installation aus GitHub wäre gesperrt');
+    if (npmPackage) {
+        if (pkg.scripts?.prepare) {
+            errors.push('package.json: Skript "prepare" ist bei Verteilung über npm nicht erlaubt (ioBroker-Repochecker)');
+        }
+    } else if (common.nogit) {
+        errors.push('io-package.json: common.nogit ist gesetzt, die Installation aus GitHub wäre gesperrt');
+    }
 
     const news = common.news ?? {};
     const keys = Object.keys(news);
@@ -113,7 +129,8 @@ export function checkConsistency({ pkg, lock, ioPkg, readme }) {
         const missing = NEWS_LANGUAGES.filter((l) => typeof entry[l] !== 'string' || !entry[l].trim());
         if (missing.length) errors.push(`io-package.json: common.news["${version}"] fehlt in: ${missing.join(', ')}`);
     }
-    if (keys.length > MAX_NEWS) errors.push(`io-package.json: common.news hat ${keys.length} Einträge, höchstens ${MAX_NEWS}`);
+    const maxNews = npmPackage ? MAX_NEWS_REPOSITORY : MAX_NEWS;
+    if (keys.length > maxNews) errors.push(`io-package.json: common.news hat ${keys.length} Einträge, höchstens ${maxNews}`);
 
     if (readme === undefined) errors.push('README.md fehlt');
     else if (changelogSection(readme, version) === null) {
@@ -157,8 +174,9 @@ export function isRuntimePath(file, { files = [], main, extraPaths = [] }) {
  * @param {object} o.head  { pkg, lock, ioPkg, readme } im Pull Request
  * @param {string[]} o.changedFiles
  * @param {string[]} [o.extraPaths]
+ * @param {boolean} [o.npmPackage] Verteilung über npm statt Installation aus GitHub
  */
-export function checkPullRequest({ base, head, changedFiles, extraPaths = [] }) {
+export function checkPullRequest({ base, head, changedFiles, extraPaths = [], npmPackage = false }) {
     const reasons = [];
     const opts = { files: head.pkg.files ?? [], main: head.pkg.main, extraPaths };
     // Auch Pfade, die nur auf dem Ziel-Branch ausgeliefert wurden, zählen
@@ -189,7 +207,7 @@ export function checkPullRequest({ base, head, changedFiles, extraPaths = [] }) 
                 `Die Version muss steigen: ${head.pkg.version} ist nicht größer als ${base.pkg.version} auf dem Ziel-Branch`,
             );
         }
-        errors.push(...checkConsistency(head));
+        errors.push(...checkConsistency(head, { npmPackage }));
     }
     return { needsRelease: reasons.length > 0, versionChanged, reasons, errors };
 }
@@ -247,6 +265,8 @@ function parseArgs(argv) {
     return out;
 }
 
+const isTrue = (v) => /^(true|1|yes)$/i.test(String(v ?? ''));
+
 const splitList = (s) =>
     String(s ?? '')
         .split(/[\s,]+/)
@@ -275,6 +295,7 @@ export function main(argv = process.argv.slice(2)) {
             head,
             changedFiles,
             extraPaths: splitList(args['extra-runtime-paths'] ?? 'src/'),
+            npmPackage: isTrue(args['npm-package']),
         });
         console.log(`Version: ${base.pkg.version ?? '(keine)'} -> ${head.pkg.version}`);
         if (r.needsRelease) {
@@ -287,7 +308,10 @@ export function main(argv = process.argv.slice(2)) {
     }
     if (cmd === 'verify') {
         const head = readHead();
-        return report(checkConsistency(head), `Version ${head.pkg.version} ist vollständig.`);
+        return report(
+            checkConsistency(head, { npmPackage: isTrue(args['npm-package']) }),
+            `Version ${head.pkg.version} ist vollständig.`,
+        );
     }
     if (cmd === 'notes') {
         const version = args._[1] ?? readJson('package.json').version;
@@ -296,7 +320,7 @@ export function main(argv = process.argv.slice(2)) {
         process.stdout.write(`${section}\n`);
         return 0;
     }
-    console.error('Aufruf: check-release.mjs pr --base <sha> | verify | notes [<version>]');
+    console.error('Aufruf: check-release.mjs pr --base <sha> | verify | notes [<version>]  [--npm-package true]');
     return 2;
 }
 

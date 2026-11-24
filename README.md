@@ -52,7 +52,8 @@ keine Version. Ist ein Release nötig oder wurde die Version geändert, muss Fol
   `io-package.json`.
 - `common.news` enthält die Version als obersten Eintrag mit Texten in en, de, ru, pt, nl, fr, it, es, pl, uk und
   zh-cn, insgesamt höchstens 20 Einträge.
-- `common.nogit` ist nicht gesetzt, sonst lehnt js-controller die Installation aus GitHub ab.
+- `common.nogit` ist nicht gesetzt, sonst lehnt js-controller die Installation aus GitHub ab (gilt nicht bei
+  `npm-package: true`; dort ist dafür ein `prepare`-Skript verboten und `common.news` auf 7 Einträge begrenzt).
 - `README.md` enthält einen nicht leeren Abschnitt `### <version> (JJJJ-MM-TT)`.
 
 Lokal prüfen (im Adapter-Verzeichnis):
@@ -101,6 +102,7 @@ holt der Job das GitHub-Release, das `.tgz` und den Branch `release` nach.
 | `default-branch` | `main` | Standard-Branch, nur dort wird released |
 | `build` | `false` | TS-Adapter: `npm run check` und `npm run build` |
 | `prebuilt-package` | `false` | `.tgz` am GitHub-Release |
+| `npm-package` | `false` | Verteilung über npm statt aus GitHub, siehe [Veröffentlichung auf npm](#veröffentlichung-auf-npm) |
 | `release-branch` | `release` | Branch, der jedem Release folgt, leer zum Abschalten |
 | `node-versions` | `["22", "24"]` | Node-Versionen für `check` |
 | `integration-node` | `22` | Node für Integration, Installation, Audit und Release |
@@ -112,6 +114,34 @@ holt der Job das GitHub-Release, das `.tgz` und den Branch `release` nach.
 | `extra-runtime-paths` | `src/` | zusätzliche ausgelieferte Pfade für den release-guard |
 | `audit-level` | `high` | Schwelle für `npm audit` |
 | `tools-ref` | `v1` | Stand dieses Repos für `check-release.mjs`, passend zum eingebundenen Tag |
+
+## Veröffentlichung auf npm
+
+Für Adapter, die über npm und das ioBroker-Repository verteilt werden, statt aus GitHub gebaut zu werden.
+Vorlage: [templates/test-and-release-npm.yml](templates/test-and-release-npm.yml) (Dateiname `test-and-release.yml`,
+wie der ioBroker-Repochecker ihn erwartet).
+
+Mit `npm-package: true` ändert `adapter.yml`:
+
+- `install` installiert das gepackte Paket (`npm run build` bei `build: true`, dann `npm pack`) statt aus Git,
+- der release-guard (`check-release.mjs --npm-package true`) erlaubt `common.nogit`, verbietet ein
+  `prepare`-Skript und begrenzt `common.news` auf 7 Einträge (der Repository-Builder kürzt sonst),
+- der Release-Job baut vor `npm pack` ausdrücklich, weil kein `prepare` mehr läuft.
+
+`adapter.yml` gibt `released` und `version` aus. Damit ruft der Adapter danach
+[`npm-publish.yml`](.github/workflows/npm-publish.yml) auf: Der Workflow holt das `.tgz` vom GitHub-Release und
+veröffentlicht es mit `npm publish --provenance` (Vorabversionen mit `--tag next`). Ist die Version schon auf npm,
+überspringt er die Veröffentlichung, ein erneuter Lauf ist also unschädlich. Die Anmeldung läuft über
+**Trusted Publishing** (OIDC), ohne Token im Repository. Dafür braucht nur dieser Aufruf `id-token: write`; Adapter
+ohne npm erteilen die Berechtigung nicht und laufen unverändert.
+
+Einmalig je Adapter:
+
+1. Die erste Version von Hand veröffentlichen (Trusted Publishing lässt sich erst für ein vorhandenes Paket
+   einrichten), am einfachsten das `.tgz` des letzten GitHub-Release: `npm publish iobroker.<name>-X.Y.Z.tgz`.
+2. Auf npmjs.com beim Paket unter Settings → Trusted publishing „GitHub Actions" mit Owner, Repository und der
+   Workflow-Datei des Adapters (`test-and-release.yml`) eintragen.
+3. `release-branch: ''` setzen: Ohne Build im Repository lässt sich der Branch nicht aus GitHub installieren.
 
 ## Umstellung eines Adapters
 
