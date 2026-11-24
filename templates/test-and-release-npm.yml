@@ -1,31 +1,41 @@
 # Vorlage für .github/workflows/test-and-release.yml eines Adapters, der über npm bzw. das ioBroker-Repository
-# verteilt wird (Dateiname wie vom ioBroker-Repochecker erwartet). Anpassen: default-branch, build.
+# verteilt wird. Aufbau und Dateiname wie der ioBroker-Standard (check-and-lint, adapter-tests, deploy), damit der
+# Repochecker ihn erkennt. Anpassen: default-branch, build (bei build: false auch in adapter-tests),
+# extra-runtime-paths.
 #
 # Voraussetzungen im Adapter: kein "prepare"-Skript, common.nogit: true, höchstens 7 Einträge in common.news.
 # Auf npmjs.com beim Paket unter Settings → Trusted publishing: GitHub Actions, Owner/Repository des Adapters,
-# Workflow-Datei "test-and-release.yml".
+# Workflow-Datei "test-and-release.yml". Pflicht-Check im Branch-Schutz: "check-and-lint / ci-result".
 name: Test and Release
 
 on:
     push:
         branches: [main]
-    pull_request:
+        # Tags setzt der Release-Job selbst (mit GITHUB_TOKEN, löst keinen Lauf aus); ein von Hand gepushter Tag
+        # startet nur die Prüfungen – released wird ausschließlich von main
+        tags:
+            # normal versions
+            - 'v[0-9]+.[0-9]+.[0-9]+'
+            # pre-releases
+            - 'v[0-9]+.[0-9]+.[0-9]+-**'
+    pull_request: {}
     schedule:
         # Wöchentlich mit voller Matrix (Linux + Windows, Node 22/24/26)
         - cron: '23 3 * * 1'
     workflow_dispatch:
 
-# Neuer Push auf denselben Pull Request bricht den älteren Lauf ab; Läufe auf dem
-# Standard-Branch laufen zu Ende, damit kein Release mittendrin abgebrochen wird
+# Neuer Push auf denselben Branch bricht den älteren Lauf ab (ioBroker-Standard). Trifft das ausnahmsweise ein
+# Release auf main, nachdem der Tag gesetzt ist: Workflow per "Run workflow" erneut starten, er vervollständigt es.
 concurrency:
-    group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-    cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    group: ${{ github.ref }}
+    cancel-in-progress: true
 
 permissions:
     contents: read
 
 jobs:
-    adapter:
+    # Alle Prüfungen und das Release (zentraler Workflow); Pflicht-Check im Branch-Schutz: "check-and-lint / ci-result"
+    check-and-lint:
         uses: Exc3pt10n/ioBroker-workflows/.github/workflows/adapter.yml@v1
         # Schreibrecht braucht nur der Release-Job (Tag, GitHub-Release)
         permissions:
@@ -36,20 +46,42 @@ jobs:
         with:
             default-branch: main
             # TypeScript-Adapter: true (führt "npm run check" und "npm run build" aus)
-            build: false
+            build: true
             # Das .tgz am GitHub-Release ist genau das Paket, das auf npm landet
             prebuilt-package: true
+            # Verteilung über npm bzw. das ioBroker-Repository: kein "prepare", common.nogit, höchstens 7 news
             npm-package: true
             # Kein Branch "release": ohne Build im Repository lässt er sich nicht aus GitHub installieren
             release-branch: ''
+            # Ausgelieferte Quellen, die nicht in "files" stehen (z. B. TypeScript unter src/)
+            extra-runtime-paths: 'src/'
+
+    # Unit- und Integrationstests mit der offiziellen ioBroker-Action (zusätzlich zu check-and-lint)
+    adapter-tests:
+        needs: check-and-lint
+        if: contains(github.event.head_commit.message, '[skip ci]') == false
+        runs-on: ${{ matrix.os }}
+        timeout-minutes: 20
+        strategy:
+            fail-fast: false
+            matrix:
+                node-version: [22.x, 24.x, 26.x]
+                os: [ubuntu-latest, windows-latest, macos-latest]
+        steps:
+            # Versions-Tag statt Commit-ID: verlangt der ioBroker-Repochecker für ioBroker-Actions
+            - uses: ioBroker/testing-action-adapter@v1
+              with:
+                  node-version: ${{ matrix.node-version }}
+                  os: ${{ matrix.os }}
+                  build: true
 
     # Nach einem Release: das Paket vom GitHub-Release auf npm veröffentlichen (Trusted Publishing, kein Token)
-    npm:
-        needs: adapter
-        if: needs.adapter.outputs.released == 'true'
+    deploy:
+        needs: [check-and-lint, adapter-tests]
+        if: needs.check-and-lint.outputs.released == 'true'
         uses: Exc3pt10n/ioBroker-workflows/.github/workflows/npm-publish.yml@v1
         permissions:
             contents: read
             id-token: write
         with:
-            version: ${{ needs.adapter.outputs.version }}
+            version: ${{ needs.check-and-lint.outputs.version }}
