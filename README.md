@@ -117,12 +117,24 @@ holt der Job das GitHub-Release, das `.tgz` und den Branch `release` nach.
 
 ## Veröffentlichung auf npm
 
-Für Adapter, die über npm und das ioBroker-Repository verteilt werden, statt aus GitHub gebaut zu werden.
-Vorlage: [templates/test-and-release-npm.yml](templates/test-and-release-npm.yml). Dateiname
-(`test-and-release.yml`), Job-Namen (`check-and-lint` ruft `adapter.yml` auf, `adapter-tests` mit der offiziellen
-`ioBroker/testing-action-adapter`, `deploy` ruft `npm-publish.yml` auf), Tag-Trigger und `concurrency` folgen dem
-ioBroker-Standard, damit der Repochecker die Datei akzeptiert. Der Pflicht-Check im Branch-Schutz heißt dann
-`check-and-lint / ci-result`.
+Für Adapter, die über npm verteilt werden, statt aus GitHub gebaut zu werden, optional zusätzlich über das
+ioBroker-Repository. Vorlage: [templates/test-and-release-npm.yml](templates/test-and-release-npm.yml), Vorbild ist
+[ioBroker.smartvis](https://github.com/Exc3pt10n/ioBroker.smartvis/blob/main/.github/workflows/test-and-release.yml),
+das so in „latest" aufgenommen ist. Dateiname (`test-and-release.yml`), Tag-Trigger, `concurrency` und die Jobs
+folgen dem ioBroker-Standard, wie ihn die Reviewer von ioBroker.repositories verlangen:
+
+| Job | Inhalt |
+|---|---|
+| `check-and-lint` | echter Standard-Job mit `ioBroker/testing-action-check@v2` (Node 22, Typprüfung, Lint, Paket-Tests) |
+| `adapter` | ruft `adapter.yml` auf: Build, Tests, Integrations- und Installationstest, audit, release-guard, Release |
+| `adapter-tests` | `ioBroker/testing-action-adapter@v1` auf Linux, Windows und macOS mit Node 22/24/26, `needs: check-and-lint` |
+| `deploy` | ruft `npm-publish.yml` auf, `needs: [check-and-lint, adapter, adapter-tests]`, liest `needs.adapter.outputs` |
+
+Pflicht-Checks im Branch-Schutz: `adapter / ci-result` und `check-and-lint`.
+
+Warnungen des Repocheckers, die mit diesem Aufbau bewusst bleiben: W3017 (`deploy` nutzt nicht
+`ioBroker/testing-action-deploy`, veröffentlicht wird das getestete `.tgz` vom GitHub-Release) und W0062
+(kein release-script bzw. adapter-dev).
 
 Mit `npm-package: true` ändert `adapter.yml`:
 
@@ -145,12 +157,17 @@ Einmalig je Adapter:
 2. Auf npmjs.com beim Paket unter Settings → Trusted publishing „GitHub Actions" mit Owner, Repository und der
    Workflow-Datei des Adapters (`test-and-release.yml`) eintragen.
 3. `release-branch: ''` setzen: Ohne Build im Repository lässt sich der Branch nicht aus GitHub installieren.
-4. Für den ioBroker-Repochecker (E3032 „kein Lauf durch den Tag ausgelöst“): Repository-Secret `RELEASE_TOKEN`
+
+Nur für die Aufnahme ins ioBroker-Repository, für reines npm nicht nötig:
+
+4. `bluefox` als Mitinhaber des npm-Pakets eintragen (`npm owner add bluefox iobroker.<name>`).
+5. Für den Repochecker (E3032 „kein Lauf durch den Tag ausgelöst“): Repository-Secret `RELEASE_TOKEN`
    anlegen und als `secrets: release-token` übergeben (siehe Vorlage). Geeignet ist ein fine-grained Personal Access
    Token nur für dieses Repository mit „Contents: Read and write“. Der Release-Job pusht den Tag dann mit diesem
    Token, und GitHub startet dafür einen eigenen Lauf (`push` auf `refs/tags/vX.Y.Z`): Er prüft, released aber
    nicht (nur auf dem Standard-Branch) und veröffentlicht nicht. Mit `GITHUB_TOKEN` gepushte Tags lösen keine Läufe
-   aus. Das Token läuft je nach Einstellung ab und muss dann erneuert werden.
+   aus. Das Token läuft je nach Einstellung ab und muss dann erneuert werden. Ohne das Secret taggt der Release-Job
+   wie bisher mit `GITHUB_TOKEN`.
 
 ## Umstellung eines Adapters
 
